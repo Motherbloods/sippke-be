@@ -529,8 +529,9 @@ app.use((error, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use("*", (req, res) => {
+// FIXED: 404 handler - Express v5 compatible wildcard route
+// Use /*splat instead of "*" for Express v5 compatibility
+app.use("/*splat", (req, res) => {
   res.status(404).json({
     success: false,
     error: "Endpoint not found",
