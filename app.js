@@ -13,17 +13,69 @@ const {
   saveNotificationToDatabase,
   sendFCMNotification,
 } = require("./notifikasi.controller.js");
+
 const app = express();
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-const serviceAccount = require("./firebase-service-account-key.json");
+// Initialize Firebase Admin hanya sekali
+let firebaseInitialized = false;
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
+const initializeFirebase = () => {
+  if (!firebaseInitialized) {
+    try {
+      // Cek apakah sudah ada app yang diinisialisasi
+      if (admin.apps.length === 0) {
+        let serviceAccount;
+
+        // Support untuk environment variables di Vercel
+        // Support untuk environment variables di Vercel
+        if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+          console.log(
+            "ℹ️ FIREBASE_SERVICE_ACCOUNT_KEY env variable ditemukan."
+          );
+          try {
+            serviceAccount = JSON.parse(
+              process.env.FIREBASE_SERVICE_ACCOUNT_KEY
+            );
+            console.log("ℹ️ Berhasil parsing FIREBASE_SERVICE_ACCOUNT_KEY.");
+          } catch (parseError) {
+            console.error(
+              "❌ Gagal parsing FIREBASE_SERVICE_ACCOUNT_KEY:",
+              parseError
+            );
+            throw parseError;
+          }
+        } else {
+          console.log(
+            "⚠️ FIREBASE_SERVICE_ACCOUNT_KEY env variable tidak ditemukan, fallback ke file JSON."
+          );
+          serviceAccount = require("./firebase-service-account-key.json");
+        }
+
+        console.log("ℹ️ Inisialisasi Firebase dengan serviceAccount:", {
+          project_id: serviceAccount.project_id,
+          client_email: serviceAccount.client_email,
+          // Jangan log private_key ya karena sensitif
+        });
+
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount),
+        });
+      }
+      firebaseInitialized = true;
+      console.log("✅ Firebase initialized successfully");
+    } catch (error) {
+      console.error("❌ Error initializing Firebase:", error);
+      throw error;
+    }
+  }
+};
+
+// Initialize Firebase
+initializeFirebase();
 
 // Function untuk mengirim notifikasi FCM
 
@@ -352,7 +404,7 @@ app.post("/api/send-verification-email", async (req, res) => {
     // Jangan print password kalau di production, ini cuma debugging
     console.log("EMAIL_PASS env is set:", !!process.env.EMAIL_PASS);
 
-    const transporter = nodemailer.createTransport({
+    const transporter = nodemailer.createTransporter({
       service: "gmail",
       auth: {
         user: process.env.EMAIL_USER,
@@ -457,12 +509,38 @@ app.get("/health", (req, res) => {
     success: true,
     message: "Notification service is running",
     timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || "development",
+    vercel: !!process.env.VERCEL,
   });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Notification service running on port ${PORT}`);
+// Error handler middleware
+app.use((error, req, res, next) => {
+  console.error("❌ Unhandled error:", error);
+  res.status(500).json({
+    success: false,
+    error: error.message,
+    timestamp: new Date().toISOString(),
+  });
 });
 
+// 404 handler
+app.use("*", (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: "Endpoint not found",
+    path: req.originalUrl,
+    method: req.method,
+  });
+});
+
+// Export untuk Vercel
 module.exports = app;
+
+// Hanya jalankan server jika tidak di Vercel
+if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`🚀 Notification service running on port ${PORT}`);
+  });
+}
