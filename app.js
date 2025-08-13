@@ -503,6 +503,9 @@ app.post("/api/send-verification-email", async (req, res) => {
     // Jangan print password kalau di production, ini cuma debugging
     console.log("EMAIL_PASS env is set:", !!process.env.EMAIL_PASS);
 
+    console.log("EMAIL_USER:", process.env.EMAIL_USER);
+    console.log("EMAIL_PASS length:", process.env.EMAIL_PASS?.length);
+
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
