@@ -205,6 +205,100 @@ app.post("/api/notifications/new-report", async (req, res) => {
   }
 });
 
+app.post("/api/notifications/report-status-changed", async (req, res) => {
+  try {
+    console.log("➡️ Received report-status-changed notification request");
+
+    const { userId, reportId, reportNumber, newStatus } = req.body;
+    console.log("📥 Request body:", req.body);
+
+    // Validasi input
+    if (!userId || !reportId || !reportNumber || !newStatus) {
+      console.warn("⚠️ Missing required fields");
+      return res.status(400).json({
+        success: false,
+        error:
+          "Missing required fields: userId, reportId, reportNumber, newStatus",
+      });
+    }
+
+    // Ambil data user dari database
+    console.log(`🔍 Fetching user data for userId: ${userId}`);
+    const { data: users, error } = await supabase
+      .from("users")
+      .select("id, fcm_token, full_name")
+      .eq("id", userId)
+      .eq("is_active", true)
+      .limit(1);
+
+    if (error) throw error;
+
+    if (!users || users.length === 0) {
+      console.warn("⚠️ No active user found with this ID");
+      return res.status(404).json({
+        success: false,
+        error: "User not found or inactive",
+      });
+    }
+
+    const user = users[0];
+
+    // Siapkan data notifikasi
+    const notificationTitle = "🔄 Status Laporan Berubah";
+    const notificationBody = `Status laporan ${reportNumber} telah berubah menjadi "${newStatus}".`;
+    const notificationData = {
+      type: "report_status_changed",
+      report_id: reportId,
+      report_number: reportNumber,
+      new_status: newStatus,
+    };
+
+    // Simpan notifikasi ke database
+    await saveNotificationToDatabase(
+      user.id,
+      notificationTitle,
+      notificationBody,
+      notificationData
+    );
+    console.log(`💾 Notification saved to DB for user ${user.id}`);
+
+    let fcmResult = null;
+    // Kirim FCM notification jika ada token
+    if (user.fcm_token) {
+      console.log(`🚀 Sending FCM notification to token: ${user.fcm_token}`);
+      fcmResult = await sendFCMNotification(
+        user.fcm_token,
+        notificationTitle,
+        notificationBody,
+        notificationData
+      );
+      console.log(
+        `✅ FCM sent: ${fcmResult.success} ${
+          fcmResult.error ? "- Error: " + fcmResult.error : ""
+        }`
+      );
+    } else {
+      console.warn(`⚠️ No FCM token available for user ${user.id}`);
+    }
+
+    res.json({
+      success: true,
+      message: `Notification sent to user ${user.full_name}`,
+      fcmSent: fcmResult?.success || false,
+      fcmError: fcmResult?.error || null,
+    });
+  } catch (error) {
+    console.error(
+      "❌ Error in report-status-changed notification endpoint:",
+      error
+    );
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 // Endpoint untuk update FCM token user
 app.post("/api/notifications/update-fcm-token", async (req, res) => {
   try {
@@ -395,7 +489,7 @@ app.post("/api/send-verification-email", async (req, res) => {
   try {
     console.log("Request body:", req.body);
 
-    const { email } = req.body;
+    const { schoolName, schoolAddress, email } = req.body;
 
     if (!email) {
       console.warn("Missing 'email' in request body");
@@ -431,6 +525,11 @@ app.post("/api/send-verification-email", async (req, res) => {
     <p>Kalau ada pertanyaan atau butuh bantuan, jangan ragu untuk menghubungi kami.</p>
 
     <p>Terima kasih sudah menggunakan SiPPKe!</p>
+
+    <hr/>
+    <p><strong>Informasi Sekolah:</strong></p>
+    <p>Nama Sekolah: ${schoolName}</p>
+    <p>Alamat: ${schoolAddress}</p>
 
     <p>Salam,<br/>
     Tim SiPPKe</p>

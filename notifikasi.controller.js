@@ -110,9 +110,30 @@ async function getTPPKUsers(schoolId) {
   }
 }
 
+async function getUserById(userId) {
+  try {
+    const { data: user, error } = await supabase
+      .from("users")
+      .select("id, fcm_token, full_name")
+      .eq("id", userId)
+      .eq("is_active", true)
+      .single(); // karena hanya 1 user
+
+    if (error) {
+      throw error;
+    }
+
+    return user || null;
+  } catch (error) {
+    console.error(`❌ Error getting user by ID (${userId}):`, error);
+    return null;
+  }
+}
+
 module.exports = {
   getTPPKUsers,
   getUserFCMToken,
   saveNotificationToDatabase,
   sendFCMNotification,
+  getUserById,
 };
