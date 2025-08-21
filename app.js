@@ -610,6 +610,205 @@ app.post("/api/notifications/test", async (req, res) => {
   }
 });
 
+app.post("/api/notifications/bulk", async (req, res) => {
+  try {
+    console.log("➡️ Received bulk notification request");
+    const {
+      targetUserIds,
+      title,
+      message,
+      notificationType = "general",
+      additionalData = {},
+      timestamp,
+    } = req.body;
+
+    console.log("🔥 Request body:", {
+      targetUserIds: targetUserIds?.length,
+      title,
+      message,
+      notificationType,
+      timestamp,
+    });
+
+    // Validasi input
+    if (
+      !targetUserIds ||
+      !Array.isArray(targetUserIds) ||
+      targetUserIds.length === 0
+    ) {
+      console.warn("⚠️ Missing or empty targetUserIds array");
+      return res.status(400).json({
+        success: false,
+        error: "Missing or empty targetUserIds array",
+      });
+    }
+
+    if (!title || !message) {
+      console.warn("⚠️ Missing required fields: title or message");
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: title, message",
+      });
+    }
+
+    // Ambil data users dari database
+    console.log(`🔍 Fetching user data for ${targetUserIds.length} users`);
+    const { data: users, error } = await supabase
+      .from("users")
+      .select("id, fcm_token, full_name")
+      .in("id", targetUserIds)
+      .eq("is_active", true);
+
+    if (error) {
+      console.error("❌ Supabase query error:", error);
+      throw error;
+    }
+
+    if (!users || users.length === 0) {
+      console.warn("⚠️ No active users found with the provided IDs");
+      return res.status(404).json({
+        success: false,
+        error: "No active users found with the provided IDs",
+      });
+    }
+
+    console.log(
+      `✅ Found ${users.length} active users out of ${targetUserIds.length} requested`
+    );
+
+    // Siapkan data notifikasi
+    const notificationData = {
+      type: notificationType,
+      timestamp: timestamp || new Date().toISOString(),
+      ...additionalData,
+    };
+
+    const results = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    // Kirim notifikasi ke setiap user
+    for (const user of users) {
+      console.log(
+        `🔔 Processing notification for user ${user.id} (${user.full_name})`
+      );
+
+      try {
+        // Simpan notifikasi ke database terlebih dahulu
+        await saveNotificationToDatabase(
+          user.id,
+          title,
+          message,
+          notificationData
+        );
+        console.log(`💾 Notification saved to DB for user ${user.id}`);
+
+        let fcmResult = { success: false, error: "No FCM token available" };
+
+        // Kirim FCM notification jika ada token
+        if (user.fcm_token) {
+          console.log(
+            `🚀 Sending FCM notification to token: ${user.fcm_token.substring(
+              0,
+              20
+            )}...`
+          );
+          fcmResult = await sendFCMNotification(
+            user.fcm_token,
+            title,
+            message,
+            notificationData
+          );
+
+          console.log(
+            `${fcmResult.success ? "✅" : "❌"} FCM result: ${
+              fcmResult.success
+            } ${fcmResult.error ? "- Error: " + fcmResult.error : ""}`
+          );
+        } else {
+          console.warn(`⚠️ No FCM token available for user ${user.id}`);
+        }
+
+        results.push({
+          userId: user.id,
+          userName: user.full_name,
+          dbSaved: true,
+          fcmSent: fcmResult.success,
+          fcmError: fcmResult.error || null,
+        });
+
+        if (fcmResult.success) {
+          successCount++;
+        } else {
+          failureCount++;
+        }
+      } catch (userError) {
+        console.error(
+          `❌ Error processing notification for user ${user.id}:`,
+          userError
+        );
+        results.push({
+          userId: user.id,
+          userName: user.full_name,
+          dbSaved: false,
+          fcmSent: false,
+          fcmError: userError.message,
+        });
+        failureCount++;
+      }
+    }
+
+    // Check for users that weren't found in database
+    const foundUserIds = users.map((u) => u.id);
+    const notFoundUserIds = targetUserIds.filter(
+      (id) => !foundUserIds.includes(id)
+    );
+
+    if (notFoundUserIds.length > 0) {
+      console.warn(
+        `⚠️ ${notFoundUserIds.length} users not found in database:`,
+        notFoundUserIds
+      );
+      notFoundUserIds.forEach((userId) => {
+        results.push({
+          userId: userId,
+          userName: "Unknown",
+          dbSaved: false,
+          fcmSent: false,
+          fcmError: "User not found or inactive",
+        });
+        failureCount++;
+      });
+    }
+
+    const totalProcessed = users.length;
+    console.log(`🎉 Bulk notification completed:`);
+    console.log(`   Total requested: ${targetUserIds.length}`);
+    console.log(`   Users found: ${users.length}`);
+    console.log(`   FCM success: ${successCount}`);
+    console.log(`   Failures: ${failureCount}`);
+
+    res.json({
+      success: true,
+      message: `Bulk notification processed for ${totalProcessed} users`,
+      summary: {
+        requested_count: targetUserIds.length,
+        found_count: users.length,
+        sent_count: successCount,
+        failed_count: failureCount,
+        not_found_count: notFoundUserIds.length,
+      },
+      results,
+    });
+  } catch (error) {
+    console.error("❌ Error in bulk notification endpoint:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 // Health check endpoint
 app.get("/health", (req, res) => {
   res.json({
